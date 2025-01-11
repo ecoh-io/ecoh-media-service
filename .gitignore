@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+logs/
+global-bundle.pem
+# production
+/dist
+/build
+src/config/ssl/
