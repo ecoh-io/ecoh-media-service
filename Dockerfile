@@ -1,5 +1,5 @@
 # Use an official Node.js runtime as the base image
-FROM node:16-alpine AS build
+FROM node:20-alpine AS build
 
 # Set working directory
 WORKDIR /app
@@ -17,7 +17,7 @@ COPY . .
 RUN npm run build
 
 # Use a smaller base image for the final build
-FROM node:16-alpine
+FROM node:20-alpine
 
 # Set working directory
 WORKDIR /app

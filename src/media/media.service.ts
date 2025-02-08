@@ -22,6 +22,8 @@ export class MediaService {
   private awsRegion: string = process.env.AWS_REGION || 'eu-west-2';
   private queueUrl: string;
   private ProfileImageQueueUrl: string;
+  private cloudFrontDomain: string =
+    process.env.AWS_CLOUDFRONT_URL || 'default-cloudfront-domain';
 
   constructor(
     @InjectRepository(Media)
@@ -69,7 +71,7 @@ export class MediaService {
     const media = this.mediaRepository.create({
       id: mediaId,
       key,
-      url: `https://${this.bucketName}.s3.${this.awsRegion}.amazonaws.com`,
+      url: `https://${this.cloudFrontDomain}/${key}`,
       type: type,
       uploadedBy: userId,
       tags: tags || [],
@@ -281,7 +283,7 @@ export class MediaService {
       };
 
       await this.s3.putObject(uploadParams).promise();
-      const thumbnailUrl = `https://${this.bucketName}.s3.${this.awsRegion}.amazonaws.com/${thumbnailKey}`;
+      const thumbnailUrl = `https://${this.cloudFrontDomain}/${key}`;
       this.logger.log(`Thumbnail generated and uploaded: ${thumbnailUrl}`);
       return thumbnailUrl;
     } catch (error) {
@@ -321,7 +323,7 @@ export class MediaService {
       };
 
       await this.s3.putObject(uploadParams).promise();
-      const optimizedUrl = `https://${this.bucketName}.s3.${this.awsRegion}.amazonaws.com/${optimizedKey}`;
+      const optimizedUrl = `https://${this.cloudFrontDomain}/${key}`;
       this.logger.log(`Optimized image uploaded: ${optimizedUrl}`);
       return optimizedUrl;
     } catch (error) {
@@ -537,7 +539,7 @@ export class MediaService {
       };
 
       await this.s3.putObject(uploadParams).promise();
-      const responsiveUrl = `https://${this.bucketName}.s3.${this.awsRegion}.amazonaws.com/${responsiveKey}`;
+      const responsiveUrl = `https://${this.cloudFrontDomain}/${key}`;
       responsiveUrls.push(responsiveUrl);
       this.logger.log(`Responsive image uploaded: ${responsiveUrl}`);
     }
@@ -568,7 +570,9 @@ export class MediaService {
       throw new BadRequestException('Media not found');
     }
 
-    const profilePictureUrl = `${media.thumbnailUrl || media.url}/${media.key}`; // Use thumbnail if available
+    const profilePictureUrl = `${media.thumbnailUrl || media.url}`; // Use thumbnail if available
+
+    console.log(profilePictureUrl);
 
     try {
       await this.publishUpdateProfileImageUrlEvent(profilePictureUrl, userId);

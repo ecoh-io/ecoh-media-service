@@ -75,7 +75,6 @@ export class WorkerService implements OnModuleInit {
       this.logger.log(`Deleted message: ${message.MessageId}`);
     } catch (error) {
       this.logger.error('Error processing message:', (error as Error).stack);
-      // Optionally, handle retries or move the message to a dead-letter queue
     }
   }
 
@@ -105,6 +104,19 @@ export class WorkerService implements OnModuleInit {
         'Error receiving messages from SQS:',
         (error as Error).stack
       );
+    }
+  }
+
+  async purgeQueue(): Promise<void> {
+    try {
+      const params: AWS.SQS.PurgeQueueRequest = {
+        QueueUrl: this.queueUrl,
+      };
+
+      await this.sqs.purgeQueue(params).promise();
+      this.logger.log('Successfully purged the SQS queue.');
+    } catch (error) {
+      this.logger.error('Error purging the SQS queue:', (error as Error).stack);
     }
   }
 
