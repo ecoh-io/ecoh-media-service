@@ -1,9 +1,40 @@
+# Node.js dependencies
 node_modules/
+
+# Build outputs
 dist/
+build/
+
+# Environment variables
 .env
+
+# Logs
 logs/
-global-bundle.pem
-# production
-/dist
-/build
+*.log
+
+# SSL certificates
 src/config/ssl/
+global-bundle.pem
+
+# Docker related files
+docker-compose.override.yml
+
+# AWS related files
+buildspec.yml
+
+# TypeScript cache
+*.tsbuildinfo
+
+# IDE specific files
+.vscode/
+.idea/
+
+# MacOS specific files
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+
+# Blob files
+blobs/

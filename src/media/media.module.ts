@@ -18,16 +18,7 @@ import { ConfigService } from '@nestjs/config';
     AlbumsModule, // Import AlbumsModule to access AlbumsService
     HttpModule,
   ],
-  providers: [
-    MediaService,
-    {
-      provide: 'AUTH_SERVICE_API_KEY',
-      useFactory: (configService: ConfigService) =>
-        configService.get<string>('authAPIKey'),
-      inject: [ConfigService],
-    },
-    LoggerService,
-  ],
+  providers: [MediaService, LoggerService],
   controllers: [MediaController],
   exports: [MediaService],
 })
