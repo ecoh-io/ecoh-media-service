@@ -570,9 +570,9 @@ export class MediaService {
       throw new BadRequestException('Media not found');
     }
 
-    const profilePictureUrl = `${media.thumbnailUrl || media.url}`; // Use thumbnail if available
+    const profilePictureUrl = media.thumbnailUrl || media.url;
 
-    console.log(profilePictureUrl);
+    console.log('Profile Picture URL:', profilePictureUrl);
 
     try {
       await this.publishUpdateProfileImageUrlEvent(profilePictureUrl, userId);
