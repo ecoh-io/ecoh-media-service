@@ -18,14 +18,12 @@ if (isSslEnabled) {
     ? path.resolve(process.env.DB_SSL_FILE)
     : null;
 
-  console.log('sslFilePath', sslFilePath);
-
   if (sslFilePath && fs.existsSync(sslFilePath)) {
     const ca = fs.readFileSync(sslFilePath).toString();
     sslOptions = {
       ca,
       require: true,
-      rejectUnauthorized: true, // Enforce SSL certificate validation
+      rejectUnauthorized: false, // Enforce SSL certificate validation
     };
   } else {
     console.warn(

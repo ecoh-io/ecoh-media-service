@@ -3,9 +3,8 @@
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import AWS from 'aws-sdk';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
-import { Logger } from 'winston';
 import { MediaService } from 'src/media/media.service';
+import { LoggerService } from 'src/logger/logger.service';
 
 @Injectable()
 export class WorkerService implements OnModuleInit {
@@ -13,8 +12,7 @@ export class WorkerService implements OnModuleInit {
   private queueUrl: string;
 
   constructor(
-    @Inject(WINSTON_MODULE_PROVIDER)
-    private readonly logger: Logger,
+    private readonly logger: LoggerService,
     private readonly mediaService: MediaService
   ) {
     AWS.config.update({ region: process.env.AWS_REGION });
@@ -29,7 +27,7 @@ export class WorkerService implements OnModuleInit {
    * Lifecycle hook that is called once the module has been initialized.
    */
   onModuleInit() {
-    this.logger.info('WorkerService initialized and ready to poll messages.');
+    this.logger.log('WorkerService initialized and ready to poll messages.');
   }
 
   /**
@@ -40,14 +38,17 @@ export class WorkerService implements OnModuleInit {
     const receiptHandle = message.ReceiptHandle;
 
     if (!receiptHandle) {
-      this.logger.error('ReceiptHandle is undefined for the message:', message);
+      this.logger.error(
+        'ReceiptHandle is undefined for the message:',
+        message.Body
+      );
       // Decide how to handle messages without ReceiptHandle
       return;
     }
 
     try {
       // Your message processing logic here
-      this.logger.info(`Processing message: ${message.MessageId}`);
+      this.logger.log(`Processing message: ${message.MessageId}`);
 
       // Example: Parse message body
       if (!message.Body) {
@@ -71,7 +72,7 @@ export class WorkerService implements OnModuleInit {
       };
 
       await this.sqs.deleteMessage(deleteParams).promise();
-      this.logger.info(`Deleted message: ${message.MessageId}`);
+      this.logger.log(`Deleted message: ${message.MessageId}`);
     } catch (error) {
       this.logger.error('Error processing message:', (error as Error).stack);
       // Optionally, handle retries or move the message to a dead-letter queue
@@ -97,7 +98,7 @@ export class WorkerService implements OnModuleInit {
           await this.processMessage(message);
         }
       } else {
-        this.logger.info('No messages received.');
+        this.logger.log('No messages received.');
       }
     } catch (error) {
       this.logger.error(
@@ -112,7 +113,7 @@ export class WorkerService implements OnModuleInit {
    */
   @Cron(CronExpression.EVERY_MINUTE) // Adjust the schedule as needed
   async handleCron() {
-    this.logger.info('Polling for SQS messages...');
+    this.logger.log('Polling for SQS messages...');
     await this.pollMessages();
   }
 }

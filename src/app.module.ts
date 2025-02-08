@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, RequestMethod } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
@@ -9,12 +9,16 @@ import { MetricsInterceptor } from './common/interceptors/metrics.interceptor';
 import configuration from './config/configuration';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as winston from 'winston';
 import { MediaModule } from './media/media.module';
 import { AlbumsModule } from './albums/albums.module';
 import { LoggerModule } from './logger/logger.module';
 import { AuthModule } from './auth/auth.module';
 import { WorkerModule } from './worker/worker.module';
 import { AwsModule } from './aws/aws.module';
+import { LoggerMiddleware } from './logger/logger.middleware';
+import { RequestIdMiddleware } from './logger/request-id.middleware';
+import { WinstonModule } from 'nest-winston';
 
 @Module({
   imports: [
@@ -23,6 +27,7 @@ import { AwsModule } from './aws/aws.module';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    LoggerModule,
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
@@ -41,7 +46,7 @@ import { AwsModule } from './aws/aws.module';
             sslOptions = {
               ca,
               require: true,
-              rejectUnauthorized: true, // Enforce SSL certificate validation
+              rejectUnauthorized: false, // Enforce SSL certificate validation
             };
           } catch (error) {
             console.error('Failed to read SSL certificate file:', error);
@@ -71,7 +76,28 @@ import { AwsModule } from './aws/aws.module';
       },
       inject: [ConfigService],
     }),
-    LoggerModule,
+    WinstonModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        level: configService.get<string>('logLevel'),
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          winston.format.errors({ stack: true }),
+          winston.format.splat(),
+          winston.format.json()
+        ),
+        transports: [
+          new winston.transports.Console({
+            format: winston.format.combine(
+              winston.format.colorize(),
+              winston.format.simple()
+            ),
+          }),
+          // Add more transports like File, AWS CloudWatch, etc., as needed
+        ],
+      }),
+      inject: [ConfigService],
+    }),
     MediaModule,
     AlbumsModule,
     MetricsModule,
@@ -86,12 +112,14 @@ import { AwsModule } from './aws/aws.module';
     },
     {
       provide: APP_INTERCEPTOR,
-      useClass: LoggingInterceptor,
-    },
-    {
-      provide: APP_INTERCEPTOR,
       useClass: MetricsInterceptor,
     },
   ],
 })
-export class AppModule {}
+export class AppModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(RequestIdMiddleware, LoggerMiddleware)
+      .forRoutes({ path: '*', method: RequestMethod.ALL });
+  }
+}

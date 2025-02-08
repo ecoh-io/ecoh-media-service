@@ -1,5 +1,5 @@
 export default () => ({
-  port: parseInt(process.env.PORT!, 10) || 4000,
+  port: parseInt(process.env.PORT!, 10) || 3000,
   nodeEnv: process.env.NODE_ENV || 'development',
   authAPIKey: process.env.AUTH_API_KEY,
   database: {

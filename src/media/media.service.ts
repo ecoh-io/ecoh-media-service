@@ -6,8 +6,6 @@ import { Repository, EntityManager, Connection } from 'typeorm';
 import { Media } from './media.entity';
 import * as AWS from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
-import { HttpService } from '@nestjs/axios';
-import { lastValueFrom } from 'rxjs';
 import sharp from 'sharp';
 import { AlbumsService } from '../albums/albums.service';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
@@ -21,14 +19,13 @@ import { LoggerService } from 'src/logger/logger.service';
 @Injectable()
 export class MediaService {
   private bucketName: string;
-  private awsRegion: string = process.env.AWS_REGION || 'us-east-1';
+  private awsRegion: string = process.env.AWS_REGION || 'eu-west-2';
   private queueUrl: string;
-  private authServiceApiKey: string = process.env.AUTH_SERVICE_API_KEY || '';
+  private ProfileImageQueueUrl: string;
 
   constructor(
     @InjectRepository(Media)
     private mediaRepository: Repository<Media>,
-    private httpService: HttpService,
     public albumsService: AlbumsService,
     private connection: Connection,
     private readonly logger: LoggerService,
@@ -40,6 +37,9 @@ export class MediaService {
   ) {
     this.bucketName = bucketName;
     this.queueUrl = process.env.AWS_SQS_QUEUE_URL || 'default-queue-url';
+    this.ProfileImageQueueUrl =
+      process.env.AWS_SQS_PROFILE_IMAGE_QUEUE_URL ||
+      'default-profile-image-queue-url';
   }
 
   /**
@@ -133,6 +133,42 @@ export class MediaService {
     } catch (error) {
       this.logger.error(
         `Failed to publish media processing event for mediaId: ${mediaId}`,
+        (error as any).stack
+      );
+      throw new BadRequestException('Failed to initiate media processing');
+    }
+  }
+
+  /**
+   * Publishes a media processing event to SQS.
+   */
+  async publishUpdateProfileImageUrlEvent(
+    imageURL: string,
+    userId: string
+  ): Promise<void> {
+    const params = {
+      QueueUrl: this.ProfileImageQueueUrl,
+      MessageBody: JSON.stringify({
+        imageURL,
+        userId,
+      }),
+      MessageAttributes: {
+        UserId: {
+          DataType: 'String',
+          StringValue: userId,
+        },
+      },
+    };
+
+    try {
+      await this.sqs.sendMessage(params).promise();
+      this.logger.log(
+        `Published Profile Image processing event for mediaId: ${userId}`
+      );
+    } catch (error) {
+      console.log(error);
+      this.logger.error(
+        `Failed to publish Profile Image processing event for mediaId: ${userId}`,
         (error as any).stack
       );
       throw new BadRequestException('Failed to initiate media processing');
@@ -532,27 +568,16 @@ export class MediaService {
       throw new BadRequestException('Media not found');
     }
 
-    const payload = {
-      profilePictureUrl: `${media.thumbnailUrl || media.url}/${media.key}`, // Use thumbnail if available
-    };
+    const profilePictureUrl = `${media.thumbnailUrl || media.url}/${media.key}`; // Use thumbnail if available
 
     try {
-      await lastValueFrom(
-        this.httpService.put(
-          `${process.env.AUTH_SERVICE_URL}/users/${userId}/proifile-picture`,
-          payload,
-          {
-            headers: {
-              'x-api-key': this.authServiceApiKey,
-              'Content-Type': 'application/json',
-            },
-          }
-        )
+      await this.publishUpdateProfileImageUrlEvent(profilePictureUrl, userId);
+      this.logger.log(
+        `Published profile image update event for user: ${userId}`
       );
-      this.logger.log(`User profile picture updated for user: ${userId}`);
     } catch (error) {
       this.logger.error(
-        `Failed to update user profile picture for user: ${userId}`,
+        `Failed to publish profile image update event for user: ${userId}`,
         (error as any).stack
       );
       // Rollback transaction by throwing an error

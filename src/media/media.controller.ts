@@ -88,7 +88,7 @@ export class MediaController {
       body.albumId,
       body.tags
     );
-    return { url, mediaId };
+    return { url, key, mediaId };
   }
 
   /**

@@ -1,9 +1,8 @@
 // src/main.ts
 
 import { NestFactory } from '@nestjs/core';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
@@ -12,16 +11,15 @@ import { LoggerService } from './logger/logger.service';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const configService = app.get(ConfigService);
-  const logger = app.get(LoggerService);
-  app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
+  const logger = await app.resolve(LoggerService);
 
   // Security Middlewares
   app.use(helmet());
 
-  // CORS Configuration
   app.enableCors({
-    origin: configService.get<string[]>('cors.origins'),
-    optionsSuccessStatus: 200,
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   // Global Validation Pipe
@@ -38,6 +36,10 @@ async function bootstrap() {
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api-docs', app, document);
   }
+
+  app.getHttpAdapter().get('/health', (req, res) => {
+    res.status(200).send('OK');
+  });
 
   // Start the application
   const port = configService.get<number>('port');

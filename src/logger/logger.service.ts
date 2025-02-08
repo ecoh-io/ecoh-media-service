@@ -1,33 +1,97 @@
 // src/logger/logger.service.ts
 
-import { Injectable, Inject } from '@nestjs/common';
-import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
-import { Logger } from 'winston';
+import {
+  Injectable,
+  Scope,
+  LoggerService as NestLoggerService,
+} from '@nestjs/common';
+import * as winston from 'winston';
+import { winstonConfig, exceptionHandlingTransports } from './logger.config';
+import { createNamespace, getNamespace } from 'cls-hooked';
 
-@Injectable()
-export class LoggerService {
-  constructor(
-    @Inject(WINSTON_MODULE_PROVIDER)
-    private readonly logger: Logger
-  ) {}
+@Injectable({ scope: Scope.TRANSIENT }) // Transient scope for per-request context
+export class LoggerService implements NestLoggerService {
+  private readonly logger: winston.Logger;
+  private readonly namespace =
+    getNamespace('request') || createNamespace('request');
 
-  log(message: string, meta?: any) {
-    this.logger.info(message, meta);
+  constructor() {
+    this.logger = winston.createLogger(winstonConfig);
+
+    // Handle uncaught exceptions and rejections
+    this.logger.exceptions.handle(...exceptionHandlingTransports);
+    this.logger.rejections.handle(...exceptionHandlingTransports);
   }
 
-  error(message: string, trace?: string, meta?: any) {
-    this.logger.error(message, { trace, ...meta });
+  // Retrieve current request ID from CLS namespace
+  private getRequestId(): string {
+    return this.namespace.get('requestId') || 'N/A';
   }
 
-  warn(message: string, meta?: any) {
-    this.logger.warn(message, meta);
+  log(message: string, context?: string, meta?: Record<string, any>) {
+    this.logger.log('info', message, {
+      context,
+      requestId: this.getRequestId(),
+      ...meta,
+    });
   }
 
-  debug(message: string, meta?: any) {
-    this.logger.debug(message, meta);
+  error(
+    message: string,
+    trace?: string,
+    context?: string,
+    meta?: Record<string, any>
+  ) {
+    this.logger.log('error', message, {
+      trace,
+      context,
+      requestId: this.getRequestId(),
+      ...meta,
+    });
   }
 
-  verbose(message: string, meta?: any) {
-    this.logger.verbose(message, meta);
+  warn(message: string, context?: string, meta?: Record<string, any>) {
+    this.logger.log('warn', message, {
+      context,
+      requestId: this.getRequestId(),
+      ...meta,
+    });
+  }
+
+  debug(message: string, context?: string, meta?: Record<string, any>) {
+    this.logger.log('debug', message, {
+      context,
+      requestId: this.getRequestId(),
+      ...meta,
+    });
+  }
+
+  verbose(message: string, context?: string, meta?: Record<string, any>) {
+    this.logger.log('info', message, {
+      context,
+      requestId: this.getRequestId(),
+      ...meta,
+    });
+  }
+
+  fatal(message: string, context?: string, meta?: Record<string, any>) {
+    this.logger.log('fatal', message, {
+      context,
+      requestId: this.getRequestId(),
+      ...meta,
+    });
+  }
+
+  trace(message: string, context?: string, meta?: Record<string, any>) {
+    this.logger.log('trace', message, {
+      context,
+      requestId: this.getRequestId(),
+      ...meta,
+    });
+  }
+
+  // Implement Nest's LoggerService method
+  setLogLevels(levels: string[]) {
+    this.logger.level = levels[0];
   }
 }

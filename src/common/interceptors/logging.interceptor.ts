@@ -7,14 +7,11 @@ import {
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
-import { Logger } from 'winston';
-import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
+import { LoggerService } from 'src/logger/logger.service';
 
 @Injectable()
 export class LoggingInterceptor implements NestInterceptor {
-  constructor(
-    @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger
-  ) {}
+  constructor(private readonly logger: LoggerService) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const req = context.switchToHttp().getRequest();
@@ -22,7 +19,7 @@ export class LoggingInterceptor implements NestInterceptor {
     const user = req.user ? req.user.sub : 'Guest';
 
     const now = Date.now();
-    this.logger.info(
+    this.logger.log(
       `Incoming Request: ${method} ${url} by ${user} | Body: ${JSON.stringify(
         body
       )} | Params: ${JSON.stringify(params)} | Query: ${JSON.stringify(query)}`
@@ -32,7 +29,7 @@ export class LoggingInterceptor implements NestInterceptor {
       .handle()
       .pipe(
         tap(response =>
-          this.logger.info(
+          this.logger.log(
             `Outgoing Response: ${method} ${url} | Response: ${JSON.stringify(
               response
             )} | Time: ${Date.now() - now}ms`

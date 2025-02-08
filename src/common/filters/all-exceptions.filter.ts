@@ -4,17 +4,13 @@ import {
   ArgumentsHost,
   HttpException,
   HttpStatus,
-  Inject,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { Logger } from 'winston';
-import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
+import { LoggerService } from 'src/logger/logger.service';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
-  constructor(
-    @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger
-  ) {}
+  constructor(private readonly logger: LoggerService) {}
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -34,11 +30,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     if (!(exception instanceof HttpException)) {
       // Log non-HTTP exceptions as errors
-      this.logger.error(`Exception thrown: ${exception}`, {
-        timestamp,
-        path: request.url,
-        method: request.method,
-      });
+      this.logger.error(
+        `Exception thrown: ${exception}`,
+        undefined,
+        undefined,
+        {
+          timestamp,
+          path: request.url,
+          method: request.method,
+        }
+      );
     } else {
       // Log HTTP exceptions with appropriate level
       const exceptionResponse = exception.getResponse();
@@ -48,13 +49,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
           : (exceptionResponse as any).message;
 
       if (status >= 500) {
-        this.logger.error(`HTTP ${status} - ${errorMessage}`, {
-          timestamp,
-          path: request.url,
-          method: request.method,
-        });
+        this.logger.error(
+          `HTTP ${status} - ${errorMessage}`,
+          undefined,
+          undefined,
+          {
+            timestamp,
+            path: request.url,
+            method: request.method,
+          }
+        );
       } else {
-        this.logger.warn(`HTTP ${status} - ${errorMessage}`, {
+        this.logger.warn(`HTTP ${status} - ${errorMessage}`, undefined, {
           timestamp,
           path: request.url,
           method: request.method,
