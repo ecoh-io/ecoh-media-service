@@ -9,17 +9,11 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   Index,
-  Unique,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 import { Media } from '../media/media.entity';
-import {
-  IsString,
-  IsUUID,
-  IsOptional,
-  IsBoolean,
-  Length,
-  IsEnum,
-} from 'class-validator';
+import { IsString, IsUUID, IsBoolean, Length, IsEnum } from 'class-validator';
 import { Visibility } from '../common/enums/visibility.enum';
 
 /**
@@ -34,7 +28,6 @@ import { Visibility } from '../common/enums/visibility.enum';
  * - Lifecycle hooks for related operations
  */
 @Entity('albums')
-@Unique(['name', 'createdBy']) // Ensure album names are unique per user
 @Index('IDX_ALBUM_NAME', ['name'])
 @Index('IDX_ALBUM_CREATED_BY', ['createdBy'])
 export class Album {
@@ -47,11 +40,6 @@ export class Album {
   @IsString()
   @Length(1, 255)
   name!: string;
-
-  @Column({ type: 'text', nullable: true })
-  @IsOptional()
-  @IsString()
-  description?: string;
 
   @Column()
   @Index()
@@ -72,6 +60,10 @@ export class Album {
 
   @OneToMany(() => Media, media => media.album, { cascade: true })
   mediaItems?: Media[];
+
+  @ManyToOne(() => Media, { nullable: true })
+  @JoinColumn({ name: 'coverPhotoId' })
+  coverPhoto!: Media;
 
   @CreateDateColumn()
   createdAt!: Date;

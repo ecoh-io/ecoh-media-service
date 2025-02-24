@@ -1,6 +1,11 @@
 // src/media/media.service.ts
 
-import { Injectable, BadRequestException, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, EntityManager, Connection } from 'typeorm';
 import { Media } from './media.entity';
@@ -19,7 +24,6 @@ import { LoggerService } from 'src/logger/logger.service';
 @Injectable()
 export class MediaService {
   private bucketName: string;
-  private awsRegion: string = process.env.AWS_REGION || 'eu-west-2';
   private queueUrl: string;
   private ProfileImageQueueUrl: string;
   private cloudFrontDomain: string =

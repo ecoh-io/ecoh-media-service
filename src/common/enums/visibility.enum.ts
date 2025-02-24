@@ -1,5 +1,6 @@
 export enum Visibility {
-  PUBLIC = 'public',
   PRIVATE = 'private',
-  SHARED = 'shared',
+  CONNECTIONS_ONLY = 'connections_only',
+  NETWORK_ONLY = 'network_only',
+  EVERYONE = 'everyone',
 }

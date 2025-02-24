@@ -13,10 +13,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MediaType } from '../../common/enums/media-type.enum';
 
 export class PresignedUrlDto {
-  @ApiProperty({ description: 'UserId', type: 'string', format: 'uuid' })
-  @IsString()
-  userId!: string;
-
   @ApiProperty({ description: 'Type of media', enum: MediaType })
   @IsEnum(MediaType)
   type!: MediaType;

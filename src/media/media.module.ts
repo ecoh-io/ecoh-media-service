@@ -1,6 +1,6 @@
 // src/media/media.module.ts
 
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MediaService } from './media.service';
 import { MediaController } from './media.controller';
@@ -15,7 +15,7 @@ import { ConfigService } from '@nestjs/config';
   imports: [
     TypeOrmModule.forFeature([Media]),
     AwsModule,
-    AlbumsModule, // Import AlbumsModule to access AlbumsService
+    forwardRef(() => AlbumsModule), // Import AlbumsModule to access AlbumsService
     HttpModule,
   ],
   providers: [MediaService, LoggerService],

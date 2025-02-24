@@ -62,9 +62,19 @@ export class AlbumsController {
   @ApiOperation({ summary: 'Create a new album' })
   @ApiResponse({ status: 201, description: 'Album created successfully.' })
   async createAlbum(@Body() createAlbumDto: CreateAlbumDto, @Req() req) {
-    const userId = req.user.id;
+    const userId = req.user.sub;
     const album = await this.albumsService.createAlbum(createAlbumDto, userId);
-    return { album };
+    return album;
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get all albums for a user' })
+  @ApiResponse({ status: 200, description: 'Albums retrieved successfully.' })
+  async getAlbums(@Req() req) {
+    const userId = req.user.sub;
+    const albums = await this.albumsService.getAlbumsByUserId(userId);
+    return albums;
   }
 
   /**
@@ -93,9 +103,9 @@ export class AlbumsController {
   @ApiResponse({ status: 200, description: 'Album retrieved successfully.' })
   @ApiResponse({ status: 404, description: 'Album not found.' })
   async getAlbum(@Param('id') id: string, @Req() req) {
-    const userId = req.user.id;
+    const userId = req.user.sub;
     const album = await this.albumsService.getAlbumById(id, userId);
-    return { album };
+    return album;
   }
 
   /**
@@ -137,7 +147,7 @@ export class AlbumsController {
     @Body() updateAlbumDto: UpdateAlbumDto,
     @Req() req
   ) {
-    const userId = req.user.id;
+    const userId = req.user.sub;
     const album = await this.albumsService.updateAlbum(
       id,
       updateAlbumDto,
@@ -164,7 +174,7 @@ export class AlbumsController {
   @ApiResponse({ status: 200, description: 'Album deleted successfully.' })
   @ApiResponse({ status: 404, description: 'Album not found.' })
   async deleteAlbum(@Param('id') id: string, @Req() req) {
-    const userId = req.user.id;
+    const userId = req.user.sub;
     await this.albumsService.deleteAlbum(id, userId);
     return { message: 'Album deleted successfully' };
   }

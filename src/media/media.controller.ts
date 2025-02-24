@@ -22,6 +22,7 @@ import {
   ApiResponse,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+import { MultipleUploadDto } from './dto/multiple-upload.dto';
 
 @ApiBearerAuth()
 @ApiTags('media')
@@ -60,9 +61,11 @@ export class MediaController {
     description: 'Pre-signed URL generated successfully.',
   })
   async getPresignedUrl(@Body() body: PresignedUrlDto, @Req() req) {
+    const userId = req.user.sub;
     // Validate mimetype based on type
     const allowedMimetypes = {
       profile_picture: ['image/jpeg', 'image/png', 'image/gif'],
+      album_cover_image: ['image/jpeg', 'image/png', 'image/gif'],
       image: ['image/jpeg', 'image/png', 'image/gif'],
       video: ['video/mp4', 'video/mpeg', 'video/quicktime'],
     };
@@ -74,21 +77,90 @@ export class MediaController {
     }
 
     // If albumId is provided, verify it belongs to the user
-    if (body.albumId && body.userId) {
-      await this.mediaService.albumsService.getAlbumById(
-        body.albumId,
-        body.userId
-      );
+    if (body.albumId && userId) {
+      await this.mediaService.albumsService.getAlbumById(body.albumId, userId);
     }
 
     const { url, key, mediaId } = await this.mediaService.generatePresignedUrl(
       body.type,
       body.mimetype,
-      body.userId,
+      userId,
       body.albumId,
       body.tags
     );
     return { url, key, mediaId };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('multiple-presigned-urls')
+  @ApiOperation({
+    summary: 'Generate multiple pre-signed URLs for media upload',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Pre-signed URLs generated successfully.',
+  })
+  async getMultiplePresignedUrls(@Body() body: MultipleUploadDto, @Req() req) {
+    const userId = req.user.sub;
+
+    // Validate mimetype based on type
+    const allowedMimetypes = {
+      profile_picture: ['image/jpeg', 'image/png', 'image/gif'],
+      image: ['image/jpeg', 'image/png', 'image/gif'],
+      video: ['video/mp4', 'video/mpeg', 'video/quicktime'],
+    };
+
+    const validateMimetype = (type: string, mimetype: string) => {
+      if (!allowedMimetypes[type].includes(mimetype)) {
+        throw new BadRequestException(
+          `Invalid mimetype ${mimetype} for the specified media type ${type}`
+        );
+      }
+    };
+
+    // If albumId is provided, verify it belongs to the user
+    const results = await Promise.all(
+      body.uploads.map(async upload => {
+        validateMimetype(upload.type, upload.mimetype);
+
+        if (upload.albumId) {
+          await this.mediaService.albumsService.getAlbumById(
+            upload.albumId,
+            userId
+          );
+        }
+
+        return this.mediaService.generatePresignedUrl(
+          upload.type,
+          upload.mimetype,
+          userId,
+          upload.albumId,
+          upload.tags
+        );
+      })
+    );
+
+    return results;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('complete-multiple-uploads')
+  @ApiOperation({
+    summary: 'Notify the media service of multiple completed uploads',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Media processing initiated successfully for all uploads.',
+  })
+  async completeMultipleUploads(@Body() body: CompleteUploadDto[], @Req() req) {
+    try {
+      await Promise.all(
+        body.map(upload => this.mediaService.completeUpload(upload))
+      );
+      return { message: 'Media processing initiated for all uploads' };
+    } catch (error) {
+      throw new BadRequestException('Failed to complete multiple uploads');
+    }
   }
 
   /**
