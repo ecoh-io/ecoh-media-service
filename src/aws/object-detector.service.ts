@@ -26,54 +26,39 @@ export class ObjectDetector {
       Key: key,
     };
 
-    let media: AWS.S3.GetObjectOutput;
-
     try {
-      media = await this.s3.getObject(params).promise();
+      const media = await this.s3.getObject(params).promise();
+
       if (!media.Body) {
         this.logger.error(`S3 object ${key} has no body.`);
         return [];
       }
-    } catch (error) {
-      this.logger.error(
-        `Failed to get object ${key} from S3`,
-        (error as Error).stack
-      );
-      return [];
-    }
 
-    // Ensure media.Body is a Buffer
-    let imageBytes: Buffer;
-    if (Buffer.isBuffer(media.Body)) {
-      imageBytes = media.Body;
-    } else if (media.Body instanceof Uint8Array) {
-      imageBytes = Buffer.from(media.Body);
-    } else {
-      this.logger.error(`Unsupported media.Body type: ${typeof media.Body}`);
-      return [];
-    }
+      const imageBytes = Buffer.isBuffer(media.Body)
+        ? media.Body
+        : Buffer.from(media.Body as Uint8Array);
 
-    const detectParams: AWS.Rekognition.DetectLabelsRequest = {
-      Image: {
-        Bytes: imageBytes,
-      },
-      MaxLabels: 10,
-      MinConfidence: 70,
-    };
+      const detectParams: AWS.Rekognition.DetectLabelsRequest = {
+        Image: { Bytes: imageBytes },
+        MaxLabels: 10,
+        MinConfidence: 70,
+      };
 
-    try {
       const response = await this.rekognition
         .detectLabels(detectParams)
         .promise();
-      const labels =
-        response.Labels?.map(label => label.Name).filter(
-          (name): name is string => typeof name === 'string'
-        ) || [];
-      this.logger.log(`Objects detected: ${labels.join(', ')}`);
-      return labels;
+
+      const labels = response.Labels ?? [];
+
+      const tags = labels
+        .map(label => label.Name?.trim().toLowerCase())
+        .filter((name): name is string => !!name && name.length > 0);
+
+      this.logger.log(`Objects detected: ${tags.join(', ')}`);
+      return tags;
     } catch (error) {
       this.logger.error(
-        'Failed to perform object detection',
+        `Failed to detect objects in ${key}:`,
         (error as Error).stack
       );
       return [];

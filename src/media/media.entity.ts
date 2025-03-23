@@ -20,6 +20,7 @@ import {
   IsBoolean,
 } from 'class-validator';
 import { MediaType } from '../common/enums/media-type.enum';
+import { Transform } from 'class-transformer';
 
 @Entity()
 @Index('IDX_MEDIA_TAGS', { synchronize: false }) // Consider using a separate index strategy for array columns
@@ -61,6 +62,7 @@ export class Media {
   @IsOptional()
   @IsArray()
   @ArrayNotEmpty()
+  @Transform(({ value }) => (Array.isArray(value) ? value : []))
   tags?: string[];
 
   @Column({ nullable: true })

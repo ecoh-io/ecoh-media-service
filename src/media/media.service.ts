@@ -166,7 +166,10 @@ export class MediaService {
         throw new BadRequestException('Media not found');
       }
 
-      if (media.type === MediaType.IMAGE) {
+      if (
+        media.type === MediaType.IMAGE ||
+        media.type === MediaType.PROFILE_PICTURE
+      ) {
         const moderationResult = await this.contentModerator.moderateContent(
           mediaId,
           key
@@ -177,7 +180,13 @@ export class MediaService {
         if (!media.isFlagged) {
           // Detect objects in the image and add tags
           const detectedTags = await this.objectDetector.detectObjects(key);
-          media.tags = [...(media.tags || []), ...detectedTags];
+          media.tags = Array.from(
+            new Set(
+              [...(media.tags ?? []), ...detectedTags]
+                .map(tag => tag.trim().toLowerCase())
+                .filter(tag => tag.length > 0)
+            )
+          );
 
           // Generate thumbnail
           const thumbnailUrl = await this.generateImageThumbnail(key);
@@ -204,6 +213,10 @@ export class MediaService {
           };
 
           this.logger.log(`Image metadata extracted for mediaId: ${mediaId}`);
+
+          if (media.type === MediaType.PROFILE_PICTURE) {
+            await this.updateUserProfilePicture(media.id, userId, manager);
+          }
         }
       }
 
@@ -240,13 +253,6 @@ export class MediaService {
           );
           throw new BadRequestException('Video moderation failed');
         }
-      }
-
-      if (media.type === MediaType.PROFILE_PICTURE) {
-        const thumbnailUrl = await this.generateImageThumbnail(key);
-        media.thumbnailUrl = thumbnailUrl;
-
-        await this.updateUserProfilePicture(media.id, userId, manager);
       }
 
       await manager.save(media);

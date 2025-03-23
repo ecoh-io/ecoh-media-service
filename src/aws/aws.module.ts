@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { S3, SNS, Rekognition, MediaConvert, DynamoDB, SQS } from 'aws-sdk';
 import { ObjectDetector } from './object-detector.service';
 import { ContentModerator } from './content-moderator.service';
-import { VideoTranscoder } from './video-transcoder.service';
 import { LoggerService } from 'src/logger/logger.service';
 import { ConfigService } from '@nestjs/config';
 
