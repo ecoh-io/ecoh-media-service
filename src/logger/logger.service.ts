@@ -6,30 +6,31 @@ import {
   LoggerService as NestLoggerService,
 } from '@nestjs/common';
 import * as winston from 'winston';
-import { winstonConfig, exceptionHandlingTransports } from './logger.config';
 import { createNamespace, getNamespace } from 'cls-hooked';
+import { exceptionHandlingTransports, logger } from './logger.config';
 
-@Injectable({ scope: Scope.TRANSIENT }) // Transient scope for per-request context
+@Injectable({ scope: Scope.TRANSIENT })
 export class LoggerService implements NestLoggerService {
-  private readonly logger: winston.Logger;
+  private readonly logger: winston.Logger = logger;
   private readonly namespace =
     getNamespace('request') || createNamespace('request');
 
-  constructor() {
-    this.logger = winston.createLogger(winstonConfig);
+  private static handlersAttached = false;
 
-    // Handle uncaught exceptions and rejections
-    this.logger.exceptions.handle(...exceptionHandlingTransports);
-    this.logger.rejections.handle(...exceptionHandlingTransports);
+  constructor() {
+    if (!LoggerService.handlersAttached) {
+      this.logger.exceptions.handle(...exceptionHandlingTransports);
+      this.logger.rejections.handle(...exceptionHandlingTransports);
+      LoggerService.handlersAttached = true;
+    }
   }
 
-  // Retrieve current request ID from CLS namespace
   private getRequestId(): string {
     return this.namespace.get('requestId') || 'N/A';
   }
 
   log(message: string, context?: string, meta?: Record<string, any>) {
-    this.logger.log('info', message, {
+    this.logger.info(message, {
       context,
       requestId: this.getRequestId(),
       ...meta,
@@ -42,7 +43,7 @@ export class LoggerService implements NestLoggerService {
     context?: string,
     meta?: Record<string, any>
   ) {
-    this.logger.log('error', message, {
+    this.logger.error(message, {
       trace,
       context,
       requestId: this.getRequestId(),
@@ -51,7 +52,7 @@ export class LoggerService implements NestLoggerService {
   }
 
   warn(message: string, context?: string, meta?: Record<string, any>) {
-    this.logger.log('warn', message, {
+    this.logger.warn(message, {
       context,
       requestId: this.getRequestId(),
       ...meta,
@@ -59,7 +60,7 @@ export class LoggerService implements NestLoggerService {
   }
 
   debug(message: string, context?: string, meta?: Record<string, any>) {
-    this.logger.log('debug', message, {
+    this.logger.debug(message, {
       context,
       requestId: this.getRequestId(),
       ...meta,
@@ -67,7 +68,7 @@ export class LoggerService implements NestLoggerService {
   }
 
   verbose(message: string, context?: string, meta?: Record<string, any>) {
-    this.logger.log('info', message, {
+    this.logger.verbose(message, {
       context,
       requestId: this.getRequestId(),
       ...meta,
@@ -90,7 +91,6 @@ export class LoggerService implements NestLoggerService {
     });
   }
 
-  // Implement Nest's LoggerService method
   setLogLevels(levels: string[]) {
     this.logger.level = levels[0];
   }

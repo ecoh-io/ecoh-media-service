@@ -21,17 +21,6 @@ import {
 } from 'class-validator';
 import { MediaType } from '../common/enums/media-type.enum';
 
-/**
- * Enhanced Media Entity with additional features:
- * - Timestamps (createdAt, updatedAt)
- * - Soft deletes
- * - Validation using class-validator
- * - Relations to User entity
- * - Improved indexing and unique constraints
- * - Specific typing for metadata
- * - Full-text search capabilities
- * - Lifecycle hooks for automatic processing
- */
 @Entity()
 @Index('IDX_MEDIA_TAGS', { synchronize: false }) // Consider using a separate index strategy for array columns
 @Unique(['key']) // Ensure the S3 object key is unique

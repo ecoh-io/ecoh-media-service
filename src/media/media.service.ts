@@ -1,31 +1,32 @@
 // src/media/media.service.ts
 
-import {
-  Injectable,
-  BadRequestException,
-  Inject,
-  forwardRef,
-} from '@nestjs/common';
+import * as exifParser from 'exif-parser';
+import * as fs from 'fs/promises';
+import * as ffmpeg from 'fluent-ffmpeg';
+import * as AWS from 'aws-sdk';
+import { Injectable, BadRequestException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, EntityManager, Connection } from 'typeorm';
 import { Media } from './media.entity';
-import * as AWS from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 import { AlbumsService } from '../albums/albums.service';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
-import * as exifParser from 'exif-parser';
-import * as fs from 'fs/promises';
 import { MediaType } from '../common/enums/media-type.enum';
 import { ObjectDetector } from 'src/aws/object-detector.service';
 import { ContentModerator } from 'src/aws/content-moderator.service';
 import { LoggerService } from 'src/logger/logger.service';
+import { VideoTranscoder } from 'src/aws/video-transcoder.service';
+
+const ffmpegPath = process.env.FFMPEG_PATH || '/opt/homebrew/bin/ffmpeg';
+const ffprobePath = ffmpegPath.replace('ffmpeg', 'ffprobe');
+
+ffmpeg.setFfmpegPath(ffmpegPath);
+ffmpeg.setFfprobePath(ffprobePath);
 
 @Injectable()
 export class MediaService {
   private bucketName: string;
-  private queueUrl: string;
-  private ProfileImageQueueUrl: string;
   private cloudFrontDomain: string =
     process.env.AWS_CLOUDFRONT_URL || 'default-cloudfront-domain';
 
@@ -37,15 +38,13 @@ export class MediaService {
     private readonly logger: LoggerService,
     private objectDetector: ObjectDetector,
     private contentModerator: ContentModerator,
+    private readonly videoTranscoder: VideoTranscoder,
     @Inject('S3') private readonly s3: AWS.S3,
-    @Inject('SQS') private readonly sqs: AWS.SQS,
-    @Inject('BUCKET_NAME') bucketName: string
+    @Inject('SNS') private readonly sns: AWS.SNS,
+    @Inject('BUCKET_NAME') bucketName: string,
+    @Inject('DYNAMODB') private readonly dynamoDB: AWS.DynamoDB.DocumentClient
   ) {
     this.bucketName = bucketName;
-    this.queueUrl = process.env.AWS_SQS_QUEUE_URL || 'default-queue-url';
-    this.ProfileImageQueueUrl =
-      process.env.AWS_SQS_PROFILE_IMAGE_QUEUE_URL ||
-      'default-profile-image-queue-url';
   }
 
   /**
@@ -101,83 +100,46 @@ export class MediaService {
     this.logger.log(`Completing upload for mediaId: ${mediaId}`);
 
     // Publish event to SQS
-    await this.publishMediaProcessingEvent(mediaId, key, userId, albumId, tags);
+    await this.publishEvent('MEDIA_PROCESSING', {
+      mediaId,
+      key,
+      userId,
+      albumId,
+      tags,
+    });
   }
 
   /**
    * Publishes a media processing event to SQS.
    */
-  async publishMediaProcessingEvent(
-    mediaId: string,
-    key: string,
-    userId: string,
-    albumId?: string,
-    tags?: string[]
+  async publishEvent(
+    eventType: 'MEDIA_PROCESSING' | 'PROFILE_IMAGE_UPDATE',
+    payload: Record<string, any>
   ): Promise<void> {
     const params = {
-      QueueUrl: this.queueUrl,
-      MessageBody: JSON.stringify({
-        mediaId,
-        key,
-        userId,
-        albumId,
-        tags,
-      }),
+      TopicArn: process.env.AWS_SNS_TOPIC_ARN, // Ensure this is set in your environment variables
+      Message: JSON.stringify(payload),
       MessageAttributes: {
-        MediaId: {
+        EventType: {
           DataType: 'String',
-          StringValue: mediaId,
+          StringValue: eventType,
         },
       },
     };
 
     try {
-      await this.sqs.sendMessage(params).promise();
+      await this.sns.publish(params).promise();
       this.logger.log(
-        `Published media processing event for mediaId: ${mediaId}`
+        `Published ${eventType} event: ${JSON.stringify(payload)}`
       );
     } catch (error) {
       this.logger.error(
-        `Failed to publish media processing event for mediaId: ${mediaId}`,
+        `Failed to publish ${eventType} event`,
         (error as any).stack
       );
-      throw new BadRequestException('Failed to initiate media processing');
-    }
-  }
-
-  /**
-   * Publishes a media processing event to SQS.
-   */
-  async publishUpdateProfileImageUrlEvent(
-    imageURL: string,
-    userId: string
-  ): Promise<void> {
-    const params = {
-      QueueUrl: this.ProfileImageQueueUrl,
-      MessageBody: JSON.stringify({
-        imageURL,
-        userId,
-      }),
-      MessageAttributes: {
-        UserId: {
-          DataType: 'String',
-          StringValue: userId,
-        },
-      },
-    };
-
-    try {
-      await this.sqs.sendMessage(params).promise();
-      this.logger.log(
-        `Published Profile Image processing event for mediaId: ${userId}`
+      throw new BadRequestException(
+        `Failed to initiate ${eventType.toLowerCase()} event`
       );
-    } catch (error) {
-      console.log(error);
-      this.logger.error(
-        `Failed to publish Profile Image processing event for mediaId: ${userId}`,
-        (error as any).stack
-      );
-      throw new BadRequestException('Failed to initiate media processing');
     }
   }
 
@@ -195,7 +157,6 @@ export class MediaService {
     this.logger.log(`Processing uploaded media: ${mediaId}`);
 
     await this.connection.transaction(async (manager: EntityManager) => {
-      // Fetch media
       const media = await manager.findOne(Media, {
         where: { id: mediaId },
         relations: ['album'],
@@ -205,55 +166,89 @@ export class MediaService {
         throw new BadRequestException('Media not found');
       }
 
-      // Content Moderation
-      const isFlagged = await this.contentModerator.moderateContent(key);
-      media.isFlagged = isFlagged;
-
-      // Object Detection and Tagging
-      const detectedTags = await this.objectDetector.detectObjects(key);
-      media.tags = [...(media.tags || []), ...detectedTags];
-
-      // Image-specific Processing
       if (media.type === MediaType.IMAGE) {
-        // Generate Thumbnail
+        const moderationResult = await this.contentModerator.moderateContent(
+          mediaId,
+          key
+        );
+        media.isFlagged =
+          typeof moderationResult === 'boolean' ? moderationResult : false;
+
+        if (!media.isFlagged) {
+          // Detect objects in the image and add tags
+          const detectedTags = await this.objectDetector.detectObjects(key);
+          media.tags = [...(media.tags || []), ...detectedTags];
+
+          // Generate thumbnail
+          const thumbnailUrl = await this.generateImageThumbnail(key);
+          media.thumbnailUrl = thumbnailUrl;
+
+          // Optimize image and update the main URL
+          const optimizedUrl = await this.optimizeImage(key);
+          media.url = optimizedUrl;
+
+          // Pull raw image buffer from S3
+          const imageBuffer = (
+            await this.s3
+              .getObject({ Bucket: this.bucketName, Key: key })
+              .promise()
+          ).Body as Buffer;
+
+          // Extract metadata using improved EXIF parser logic
+          const imageMetadata = await this.extractImageMetadata(imageBuffer);
+
+          // Store into media.metadata
+          media.metadata = {
+            ...imageMetadata,
+            responsiveImages: await this.generateResponsiveImages(key),
+          };
+
+          this.logger.log(`Image metadata extracted for mediaId: ${mediaId}`);
+        }
+      }
+
+      if (media.type === MediaType.VIDEO) {
+        try {
+          const jobId = await this.contentModerator.moderateVideo(mediaId, key);
+          this.logger.log(
+            `Video moderation started for ${mediaId}, Job ID: ${jobId}`
+          );
+
+          await this.dynamoDB
+            .put({
+              TableName: 'video_moderation_jobs',
+              Item: {
+                mediaId,
+                jobId,
+                key,
+                status: 'PENDING',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            })
+            .promise();
+
+          await this.videoTranscoder.transcodeVideo(mediaId, key);
+        } catch (error) {
+          console.log(
+            'Failed to initiate video moderation for: ${mediaId}`,',
+            error
+          );
+          this.logger.error(
+            `Failed video moderation for: ${mediaId}`,
+            error as any
+          );
+          throw new BadRequestException('Video moderation failed');
+        }
+      }
+
+      if (media.type === MediaType.PROFILE_PICTURE) {
         const thumbnailUrl = await this.generateImageThumbnail(key);
         media.thumbnailUrl = thumbnailUrl;
 
-        // Optimize Image and Convert Format
-        const optimizedUrl = await this.optimizeImage(key);
-        media.url = optimizedUrl; // Update to optimized image URL
-
-        // Extract Metadata
-        const imageBuffer = (
-          await this.s3
-            .getObject({ Bucket: this.bucketName, Key: key })
-            .promise()
-        ).Body as Buffer;
-        const metadata = await this.extractImageMetadata(imageBuffer);
-        media.metadata = metadata;
-
-        // Generate Responsive Images
-        const responsiveUrls = await this.generateResponsiveImages(key);
-        media.metadata = media.metadata || {};
-        media.metadata.responsiveImages = responsiveUrls; // Store responsive image URLs
-      }
-
-      // Video-specific Processing
-      if (media.type === MediaType.VIDEO) {
-        // Transcode Video
-        await this.transcodeVideo(key);
-
-        // Extract Metadata
-        const metadata = await this.extractVideoMetadata(key);
-        media.metadata = metadata;
-      }
-
-      // Update User Profile if it's a profile picture
-      if (media.type === MediaType.PROFILE_PICTURE) {
         await this.updateUserProfilePicture(media.id, userId, manager);
       }
 
-      // Save updated media
       await manager.save(media);
     });
 
@@ -340,97 +335,6 @@ export class MediaService {
   }
 
   /**
-   * Transcodes a video into multiple formats and resolutions.
-   */
-  async transcodeVideo(key: string): Promise<void> {
-    this.logger.log(`Transcoding video for key: ${key}`);
-
-    const inputPath = `/tmp/${key}`;
-    const outputPath720 = `/tmp/${key}_720p.mp4`;
-    const outputPath1080 = `/tmp/${key}_1080p.mp4`;
-
-    try {
-      // Download the video from S3
-      const params = { Bucket: this.bucketName, Key: key };
-      const video = await this.s3.getObject(params).promise();
-      await fs.writeFile(inputPath, video.Body as Buffer);
-
-      // Transcode to 720p
-      await this.runFFmpeg(inputPath, outputPath720, '1280x720');
-
-      // Transcode to 1080p
-      await this.runFFmpeg(inputPath, outputPath1080, '1920x1080');
-
-      // Upload transcoded videos back to S3
-      await this.s3
-        .upload({
-          Bucket: this.bucketName,
-          Key: `${key}_720p.mp4`,
-          Body: await fs.readFile(outputPath720),
-          ContentType: 'video/mp4',
-          CacheControl: 'max-age=31536000',
-        })
-        .promise();
-      await this.s3
-        .upload({
-          Bucket: this.bucketName,
-          Key: `${key}_1080p.mp4`,
-          Body: await fs.readFile(outputPath1080),
-          ContentType: 'video/mp4',
-          CacheControl: 'max-age=31536000',
-        })
-        .promise();
-
-      this.logger.log(`Video transcoded and uploaded for key: ${key}`);
-
-      // Cleanup
-      await fs.unlink(inputPath);
-      await fs.unlink(outputPath720);
-      await fs.unlink(outputPath1080);
-    } catch (error) {
-      this.logger.error(
-        `Failed to transcode video for key: ${key}`,
-        (error as any).stack
-      );
-      throw new BadRequestException('Failed to transcode video');
-    }
-  }
-
-  /**
-   * Runs FFmpeg to transcode media.
-   */
-  private runFFmpeg(
-    input: string,
-    output: string,
-    resolution: string
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
-      const ffmpeg = require('child_process').spawn(ffmpegPath, [
-        '-i',
-        input,
-        '-s',
-        resolution,
-        '-c:a',
-        'copy',
-        output,
-      ]);
-
-      ffmpeg.stderr.on('data', (data: Buffer) => {
-        this.logger.debug(`FFmpeg STDERR: ${data.toString()}`);
-      });
-
-      ffmpeg.on('close', (code: number) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`FFmpeg process exited with code ${code}`));
-        }
-      });
-    });
-  }
-
-  /**
    * Optimizes an image by compressing and converting it to WebP format.
    * (Redundant method name removed)
    */
@@ -438,14 +342,45 @@ export class MediaService {
   /**
    * Extracts metadata from an image using exif-parser.
    */
-  async extractImageMetadata(buffer: Buffer): Promise<any> {
+  async extractImageMetadata(buffer: Buffer): Promise<Record<string, any>> {
     try {
       const parser = exifParser.create(buffer);
       const result = parser.parse();
-      return result.tags;
-    } catch (error) {
-      this.logger.warn('Failed to extract EXIF data', (error as any).stack);
-      return {};
+
+      // Extract common metadata fields
+      const tags = result.tags || {};
+      const metadata = {
+        orientation: tags.Orientation,
+        width: tags.ExifImageWidth,
+        height: tags.ExifImageHeight,
+        cameraMake: tags.Make,
+        cameraModel: tags.Model,
+        iso: tags.ISO,
+        exposureTime: tags.ExposureTime,
+        focalLength: tags.FocalLength,
+        creationDate: tags.DateTimeOriginal,
+      };
+      this.logger.log(`Extracted image metadata: ${JSON.stringify(metadata)}`);
+      return metadata;
+    } catch (exifError) {
+      this.logger.warn('EXIF parsing failed, falling back to Sharp');
+
+      try {
+        const sharpMeta = await sharp(buffer).metadata();
+        const metadata = {
+          orientation: sharpMeta.orientation,
+          width: sharpMeta.width,
+          height: sharpMeta.height,
+          format: sharpMeta.format,
+        };
+        this.logger.log(
+          `Extracted image metadata: ${JSON.stringify(metadata)}`
+        );
+        return metadata;
+      } catch (sharpError) {
+        this.logger.warn('Sharp fallback metadata extraction failed');
+        return {};
+      }
     }
   }
 
@@ -455,7 +390,7 @@ export class MediaService {
   async extractVideoMetadata(key: string): Promise<any> {
     this.logger.log(`Extracting video metadata for key: ${key}`);
 
-    const inputPath = `/tmp/${key}`;
+    const inputPath = `/tmp/${key.replace(/\//g, '_')}`; // safe file name
 
     try {
       // Download the video from S3
@@ -463,57 +398,54 @@ export class MediaService {
       const video = await this.s3.getObject(params).promise();
       await fs.writeFile(inputPath, video.Body as Buffer);
 
-      // Run FFprobe to get metadata
-      const metadata = await this.runFFprobe(inputPath);
+      // Confirm file exists
+      const exists = await fs.stat(inputPath).catch(() => null);
+      if (!exists)
+        throw new Error(`Failed to write video to disk at ${inputPath}`);
 
-      // Cleanup
-      await fs.unlink(inputPath);
+      // Extract metadata using fluent-ffmpeg
+      const metadata = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(inputPath, (err, data) => {
+          if (err) return reject(err);
 
+          const videoStream = data.streams.find(s => s.codec_type === 'video');
+
+          const result = {
+            duration: parseFloat(data.format.duration), // in seconds
+            size: parseInt(data.format.size), // total file size in bytes
+            formatName: data.format.format_name, // e.g., mov, mp4
+            formatLongName: data.format.format_long_name, // e.g., QuickTime / MOV
+            codec: videoStream?.codec_name, // e.g., h264
+            codecLongName: videoStream?.codec_long_name, // e.g., H.264 / AVC / MPEG-4 AVC
+            width: videoStream?.width,
+            height: videoStream?.height,
+            bitrate: parseInt(data.format.bit_rate), // average bitrate in bps
+            frameRate: eval(videoStream?.avg_frame_rate || '0'), // in fps
+            pixelFormat: videoStream?.pix_fmt, // e.g., yuv420p
+            level: videoStream?.level, // codec level
+            profile: videoStream?.profile, // codec profile e.g., High, Main
+            rotation: videoStream?.tags?.rotate || 0, // if available (useful for phone videos)
+            creationTime:
+              videoStream?.tags?.creation_time || // when video was captured
+              data.format.tags?.creation_time,
+            aspectRatio:
+              videoStream?.display_aspect_ratio || // e.g., 16:9
+              `${videoStream?.width}:${videoStream?.height}`,
+          };
+
+          resolve(result);
+        });
+      });
+
+      this.logger.log(`Extracted video metadata: ${JSON.stringify(metadata)}`);
+
+      await fs.unlink(inputPath); // clean up
       return metadata;
     } catch (error) {
-      this.logger.warn(
-        `Failed to extract video metadata for key: ${key}`,
-        (error as any).stack
-      );
+      console.log('Failed to extract video metadata:', error);
+      this.logger.warn(`Failed to extract video metadata for key: ${key}`);
       return {};
     }
-  }
-
-  /**
-   * Runs FFprobe to get video metadata.
-   */
-  private runFFprobe(input: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-      const ffprobePath = process.env.FFMPEG_PATH
-        ? process.env.FFMPEG_PATH.replace('ffmpeg', 'ffprobe')
-        : 'ffprobe';
-      const ffprobe = require('child_process').spawn(ffprobePath, [
-        '-v',
-        'error',
-        '-show_entries',
-        'format=duration',
-        '-of',
-        'json',
-        input,
-      ]);
-
-      let data = '';
-      ffprobe.stdout.on('data', (chunk: Buffer) => {
-        data += chunk.toString();
-      });
-
-      ffprobe.stderr.on('data', (chunk: Buffer) => {
-        this.logger.debug(`FFprobe STDERR: ${chunk.toString()}`);
-      });
-
-      ffprobe.on('close', (code: number) => {
-        if (code === 0) {
-          resolve(JSON.parse(data));
-        } else {
-          reject(new Error(`FFprobe process exited with code ${code}`));
-        }
-      });
-    });
   }
 
   /**
@@ -522,33 +454,50 @@ export class MediaService {
   async generateResponsiveImages(key: string): Promise<string[]> {
     this.logger.log(`Generating responsive images for key: ${key}`);
 
-    const resolutions = [320, 640, 1280];
+    const resolutions = [320, 640, 1024, 1600];
     const responsiveUrls: string[] = [];
 
-    const params = { Bucket: this.bucketName, Key: key };
-    const image = await this.s3.getObject(params).promise();
+    try {
+      // Fetch original image
+      const { Body, ContentType } = await this.s3
+        .getObject({ Bucket: this.bucketName, Key: key })
+        .promise();
 
-    for (const width of resolutions) {
-      const resizedBuffer = await sharp(image.Body as Buffer)
-        .resize(width)
-        .toBuffer();
+      if (!Body) {
+        this.logger.warn(`No image body found for key: ${key}`);
+        return [];
+      }
 
-      const responsiveKey = key.replace(/(\.\w+)$/, `_${width}px$1`);
-      const uploadParams = {
-        Bucket: this.bucketName,
-        Key: responsiveKey,
-        Body: resizedBuffer,
-        ContentType: image.ContentType,
-        CacheControl: 'max-age=31536000', // Cache for 1 year
-      };
+      const imageBuffer = Body as Buffer;
 
-      await this.s3.putObject(uploadParams).promise();
-      const responsiveUrl = `https://${this.cloudFrontDomain}/${key}`;
-      responsiveUrls.push(responsiveUrl);
-      this.logger.log(`Responsive image uploaded: ${responsiveUrl}`);
+      for (const width of resolutions) {
+        const responsiveKey = key.replace(/(\.\w+)$/, `_${width}px.webp`);
+
+        const resizedBuffer = await sharp(imageBuffer)
+          .resize({ width })
+          .webp({ quality: 80 })
+          .toBuffer();
+
+        await this.s3
+          .putObject({
+            Bucket: this.bucketName,
+            Key: responsiveKey,
+            Body: resizedBuffer,
+            ContentType: 'image/webp',
+            CacheControl: 'max-age=31536000',
+          })
+          .promise();
+
+        const responsiveUrl = `https://${this.cloudFrontDomain}/${responsiveKey}`;
+        responsiveUrls.push(responsiveUrl);
+        this.logger.log(`Uploaded responsive image: ${responsiveUrl}`);
+      }
+
+      return responsiveUrls;
+    } catch (error) {
+      this.logger.error(`Failed to generate responsive images for key: ${key}`);
+      return [];
     }
-
-    return responsiveUrls;
   }
 
   /**
@@ -564,9 +513,11 @@ export class MediaService {
     userId: string,
     manager: EntityManager
   ): Promise<void> {
-    this.logger.log(`Updating user profile picture for user: ${userId}`);
+    this.logger.log(`Updating profile picture for user: ${userId}`);
 
+    // Fetch media record
     const media = await manager.findOne(Media, { where: { id: mediaId } });
+
     if (!media) {
       this.logger.warn(
         `Media not found for profile picture update: ${mediaId}`
@@ -574,23 +525,53 @@ export class MediaService {
       throw new BadRequestException('Media not found');
     }
 
+    // Ensure profile picture URL exists
     const profilePictureUrl = media.thumbnailUrl || media.url;
-
-    console.log('Profile Picture URL:', profilePictureUrl);
+    if (!profilePictureUrl) {
+      this.logger.error(`No valid URL found for mediaId: ${mediaId}`);
+      throw new BadRequestException('Invalid profile picture URL');
+    }
 
     try {
-      await this.publishUpdateProfileImageUrlEvent(profilePictureUrl, userId);
+      // Publish SNS event for profile image update
+      await this.publishEvent('PROFILE_IMAGE_UPDATE', {
+        imageURL: profilePictureUrl,
+        userId,
+      });
+
       this.logger.log(
-        `Published profile image update event for user: ${userId}`
+        `Profile image update event published for user: ${userId}`
       );
     } catch (error) {
       this.logger.error(
         `Failed to publish profile image update event for user: ${userId}`,
         (error as any).stack
       );
-      // Rollback transaction by throwing an error
       throw new BadRequestException('Failed to update user profile picture');
     }
+  }
+
+  async updateModerationStatus(
+    mediaId: string,
+    isFlagged: boolean
+  ): Promise<void> {
+    this.logger.log(
+      `Updating moderation status for Media ID: ${mediaId}, Flagged: ${isFlagged}`
+    );
+
+    await this.connection.transaction(async (manager: EntityManager) => {
+      const media = await manager.findOne(Media, { where: { id: mediaId } });
+
+      if (!media) {
+        this.logger.warn(`No media found for Media ID: ${mediaId}`);
+        return;
+      }
+
+      media.isFlagged = isFlagged;
+      await manager.save(media);
+
+      this.logger.log(`Moderation status updated for Media ID: ${media.id}`);
+    });
   }
 
   /**

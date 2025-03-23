@@ -3,7 +3,6 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
-import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { MetricsModule } from './metrics/metrics.module';
 import { MetricsInterceptor } from './common/interceptors/metrics.interceptor';
 import configuration from './config/configuration';
@@ -71,7 +70,7 @@ import { WinstonModule } from 'nest-winston';
             migrationsDir: 'src/migrations',
           },
           ssl: sslOptions,
-          logging: configService.get<string>('nodeEnv') !== 'production',
+          logging: false,
         };
       },
       inject: [ConfigService],
